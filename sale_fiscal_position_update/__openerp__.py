@@ -18,7 +18,7 @@
               "Akretion,"
               "Odoo Community Association (OCA)",
     'depends': ['sale'],
-    'data': ['sale_view.xml'],
+    'data': [],
     'installable': True,
     'active': False,
 }

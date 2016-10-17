@@ -1,4 +1,4 @@
-# -*- encoding: utf-8 -*-
+# -*- coding: utf-8 -*-
 ##############################################################################
 #
 #    Sale Rental module for Odoo
@@ -21,7 +21,8 @@
 ##############################################################################
 
 from openerp import models, fields, api, _
-from openerp.exceptions import Warning, ValidationError
+from openerp.exceptions import ValidationError
+from openerp.exceptions import Warning as UserError
 from openerp.tools import float_compare
 from dateutil.relativedelta import relativedelta
 import openerp.addons.decimal_precision as dp
@@ -44,7 +45,7 @@ class ProductProduct(models.Model):
         string='Related Rental Services')
 
     @api.one
-    @api.constrains('rented_product_id', 'must_have_dates')
+    @api.constrains('rented_product_id', 'must_have_dates', 'type', 'uom_id')
     def _check_rental(self):
         if self.rented_product_id and self.type != 'service':
             raise ValidationError(
@@ -114,7 +115,7 @@ class SaleOrder(models.Model):
                     line.extension_rental_id.in_move_id.date = line.end_date
                 elif line.sell_rental_id:
                     if line.sell_rental_id.out_move_id.state != 'done':
-                        raise Warning(
+                        raise UserError(
                             _('Cannot sell the rental %s because it has '
                                 'not been delivered')
                             % line.sell_rental_id.display_name)
@@ -177,7 +178,7 @@ class SaleOrderLine(models.Model):
                         self.number_of_days, self.rental_qty))
             if not self.must_have_dates:
                 raise ValidationError(
-                    _("On the rental sale order line with product %s"
+                    _("On the rental sale order line with product %s "
                         "the must have dates option should be enabled")
                     % self.product_id.name)
                 # the module sale_start_end_dates checks that, when we have
@@ -292,7 +293,7 @@ class SaleOrderLine(models.Model):
                 self.rental_type == 'rental_extension' and
                 self.extension_rental_id):
             if self.extension_rental_id.rental_product_id != self.product_id:
-                raise Warning(
+                raise UserError(
                     _("The Rental Service of the Rental Extension you just "
                         "selected is '%s' and it's not the same as the "
                         "Product currently selected in this Sale Order Line.")
@@ -337,10 +338,15 @@ class SaleRental(models.Model):
             self.rented_product_id.name,
             self.start_date,
             self.end_date,
-            self.state)  # TODO : display label, not the technical key
+            self._fields['state'].convert_to_export(self.state, self.env))
 
     @api.one
-    @api.depends('start_order_line_id', 'start_order_line_id.procurement_ids')
+    @api.depends(
+        'start_order_line_id.order_id.state',
+        'start_order_line_id.procurement_ids.move_ids.state',
+        'start_order_line_id.procurement_ids.move_ids.move_dest_id.state',
+        'sell_order_line_ids.procurement_ids.move_ids.state',
+        )
     def _compute_procurement_and_move(self):
         procurement = False
         in_move = False
@@ -357,8 +363,7 @@ class SaleRental(models.Model):
                 for move in procurement.move_ids:
                     if move.move_dest_id:
                         out_move = move
-                    else:
-                        in_move = move
+                        in_move = move.move_dest_id
             if (
                     self.sell_order_line_ids and
                     self.sell_order_line_ids[0].procurement_ids):
@@ -379,6 +384,8 @@ class SaleRental(models.Model):
                     state = 'sell_progress'
                     if sell_move and sell_move.state == 'done':
                         state = 'sold'
+            if self.start_order_line_id.order_id.state == 'cancel':
+                state = 'cancel'
         self.procurement_id = procurement
         self.in_move_id = in_move
         self.out_move_id = out_move
@@ -404,10 +411,11 @@ class SaleRental(models.Model):
     display_name = fields.Char(
         compute='_display_name', string='Display Name')
     start_order_line_id = fields.Many2one(
-        'sale.order.line', string='Rental Sale Order Line')
+        'sale.order.line', string='Rental Sale Order Line',
+        readonly=True)
     start_date = fields.Date(
         related='start_order_line_id.start_date',
-        string='Start Date', readonly=True)
+        string='Start Date', readonly=True, store=True)
     rental_product_id = fields.Many2one(
         'product.product', related='start_order_line_id.product_id',
         string="Rental Service", readonly=True)
@@ -422,20 +430,20 @@ class SaleRental(models.Model):
         'sale.order', related='start_order_line_id.order_id',
         string='Rental Sale Order', readonly=True)
     company_id = fields.Many2one(
-        'res.company', related='start_order_id.company_id',
+        'res.company', related='start_order_line_id.order_id.company_id',
         string='Company', readonly=True)
     partner_id = fields.Many2one(
-        'res.partner', related='start_order_id.partner_id',
-        string='Partner', readonly=True)
+        'res.partner', related='start_order_line_id.order_id.partner_id',
+        string='Customer', readonly=True, store=True)
     procurement_id = fields.Many2one(
         'procurement.order', string="Procurement", readonly=True,
-        compute='_compute_procurement_and_move')
+        compute='_compute_procurement_and_move', store=True)
     out_move_id = fields.Many2one(
         'stock.move', compute='_compute_procurement_and_move',
-        string='Outgoing Stock Move', readonly=True)
+        string='Outgoing Stock Move', readonly=True, store=True)
     in_move_id = fields.Many2one(
         'stock.move', compute='_compute_procurement_and_move',
-        string='Return Stock Move', readonly=True)
+        string='Return Stock Move', readonly=True, store=True)
     out_state = fields.Selection([
         ('draft', 'New'),
         ('cancel', 'Cancelled'),
@@ -468,10 +476,10 @@ class SaleRental(models.Model):
         string='Sell Rented Product', readonly=True)
     sell_procurement_id = fields.Many2one(
         'procurement.order', string="Sell Procurement", readonly=True,
-        compute='_compute_procurement_and_move')
+        compute='_compute_procurement_and_move', store=True)
     sell_move_id = fields.Many2one(
         'stock.move', compute='_compute_procurement_and_move',
-        string='Sell Stock Move', readonly=True)
+        string='Sell Stock Move', readonly=True, store=True)
     sell_state = fields.Selection([
         ('draft', 'New'),
         ('cancel', 'Cancelled'),
@@ -495,18 +503,21 @@ class SaleRental(models.Model):
         ('sell_progress', 'Sell in progress'),
         ('sold', 'Sold'),
         ('in', 'Back In'),
+        ('cancel', 'Cancelled'),
         ], string='State', compute='_compute_procurement_and_move',
-        readonly=True)
+        readonly=True, store=True)
 
 
 class StockWarehouse(models.Model):
     _inherit = "stock.warehouse"
 
+    rental_view_location_id = fields.Many2one(
+        'stock.location', 'Parent Rental', domain=[('usage', '=', 'view')])
     rental_in_location_id = fields.Many2one(
         'stock.location', 'Rental In', domain=[('usage', '<>', 'view')])
     rental_out_location_id = fields.Many2one(
         'stock.location', 'Rental Out', domain=[('usage', '<>', 'view')])
-    rental_allowed = fields.Boolean('Rental Allowed', default=True)
+    rental_allowed = fields.Boolean('Rental Allowed')
     rental_route_id = fields.Many2one(
         'stock.location.route', string='Rental Route')
     sell_rented_product_route_id = fields.Many2one(
@@ -522,7 +533,7 @@ class StockWarehouse(models.Model):
             rental_routes = route_obj.search([('name', '=', _('Rent'))])
             rental_route = rental_routes and rental_routes[0] or False
         if not rental_route:
-            raise Warning(_("Can't find any generic 'Rent' route."))
+            raise UserError(_("Can't find any generic 'Rent' route."))
         try:
             sell_rented_product_route = self.env.ref(
                 'sale_rental.route_warehouse0_sell_rented_product')
@@ -533,15 +544,15 @@ class StockWarehouse(models.Model):
                 sell_rented_product_routes and sell_rented_product_routes[0]\
                 or False
         if not sell_rented_product_route:
-            raise Warning(
+            raise UserError(
                 _("Can't find any generic 'Sell Rented Product' route."))
 
         if not self.rental_in_location_id:
-            raise Warning(
+            raise UserError(
                 _("The Rental Input stock location is not set on the "
                     "warehouse %s") % self.name)
         if not self.rental_out_location_id:
-            raise Warning(
+            raise UserError(
                 _("The Rental Output stock location is not set on the "
                     "warehouse %s") % self.name)
         rental_pull_rule = {
@@ -588,18 +599,68 @@ class StockWarehouse(models.Model):
     @api.multi
     def write(self, vals):
         if 'rental_allowed' in vals:
+            rental_route = self.env.ref('sale_rental.route_warehouse0_rental')
+            sell_rented_route = self.env.ref(
+                'sale_rental.route_warehouse0_sell_rented_product')
             if vals.get('rental_allowed'):
                 for warehouse in self:
+                    # create stock locations
+                    slo = self.env['stock.location']
+                    if not warehouse.rental_view_location_id:
+                        view_loc_id = slo.create({
+                            'name': _('Rental'),
+                            'location_id': self.view_location_id.id,
+                            'usage': 'view',
+                            })
+                        warehouse.rental_view_location_id = view_loc_id.id
+                    if not warehouse.rental_in_location_id:
+                        in_loc_id = slo.create({
+                            'name': _('Rental In'),
+                            'location_id':
+                            warehouse.rental_view_location_id.id,
+                            })
+                        warehouse.rental_in_location_id = in_loc_id.id
+                    if not warehouse.rental_out_location_id:
+                        out_loc_id = slo.create({
+                            'name': _('Rental Out'),
+                            'location_id':
+                            warehouse.rental_view_location_id.id,
+                            })
+                        warehouse.rental_out_location_id = out_loc_id.id
+                    warehouse.write({
+                        'route_ids': [(4, rental_route.id)],
+                        'rental_route_id': rental_route.id,
+                        'sell_rented_product_route_id': sell_rented_route.id,
+                        })
                     for obj, rules_list in\
                             self._get_rental_push_pull_rules().iteritems():
                         for rule in rules_list:
                             self.env[obj].create(rule)
             else:
                 for warehouse in self:
-                    warehouse.rental_route_id.pull_ids.unlink()
-                    warehouse.rental_route_id.push_ids.unlink()
-                    warehouse.sell_rented_product_route_id.pull_ids.unlink()
-                    warehouse.sell_rented_product_route_id.push_ids.unlink()
+                    pull_rules_to_delete = self.env['procurement.rule'].search(
+                        [
+                            ('route_id', 'in', (
+                                warehouse.rental_route_id.id,
+                                warehouse.sell_rented_product_route_id.id)),
+                            ('location_src_id', 'in', (
+                                warehouse.rental_out_location_id.id,
+                                warehouse.rental_in_location_id.id)),
+                            ('action', '=', 'move')])
+                    pull_rules_to_delete.unlink()
+                    push_rule_to_delete =\
+                        self.env['stock.location.path'].search([
+                            ('route_id', '=', warehouse.rental_route_id.id),
+                            ('location_from_id', '=',
+                                warehouse.rental_out_location_id.id),
+                            ('location_dest_id', '=',
+                                warehouse.rental_in_location_id.id)])
+                    push_rule_to_delete.unlink()
+                    warehouse.write({
+                        'route_ids': [(3, rental_route.id)],
+                        'rental_route_id': False,
+                        'sell_rented_product_route_id': False,
+                        })
         return super(StockWarehouse, self).write(vals)
 
 
@@ -636,3 +697,29 @@ class StockLocationPath(models.Model):
             rental_end_date = move.procurement_id.sale_line_id.end_date
             vals['date'] = vals['date_expected'] = rental_end_date
         return vals
+
+
+class StockInventory(models.Model):
+    _inherit = 'stock.inventory'
+
+    @api.multi
+    def create_demo_and_validate(self):
+        silo = self.env['stock.inventory.line']
+        demo_inv = self.env.ref('sale_rental.rental_inventory')
+        rental_in_loc = self.env.ref('stock.warehouse0').rental_in_location_id
+        products = [
+            ('product.product_product_6', 56),
+            ('product.product_product_8', 46),
+            ('product.product_product_25', 2),
+            ]
+        for (product_xmlid, qty) in products:
+            product = self.env.ref(product_xmlid)
+            silo.create({
+                'product_id': product.id,
+                'product_uom_id': product.uom_id.id,
+                'inventory_id': demo_inv.id,
+                'product_qty': qty,
+                'location_id': rental_in_loc.id,
+            })
+        demo_inv.action_done()
+        return True

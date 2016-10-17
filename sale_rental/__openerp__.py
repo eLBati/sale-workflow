@@ -1,4 +1,4 @@
-# -*- encoding: utf-8 -*-
+# -*- coding: utf-8 -*-
 ##############################################################################
 #
 #    Rental module for Odoo
@@ -23,11 +23,11 @@
 
 {
     'name': 'Rental',
-    'version': '0.1',
+    'version': '8.0.1.0.0',
     'category': 'Sales Management',
     'license': 'AGPL-3',
     'summary': 'Manage Rental of Products',
-    'author': 'Akretion',
+    'author': 'Akretion, Odoo Community Association (OCA)',
     'website': 'http://www.akretion.com',
     'depends': ['sale_start_end_dates', 'stock'],
     'data': [

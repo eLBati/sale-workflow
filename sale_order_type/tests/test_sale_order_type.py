@@ -11,8 +11,7 @@ class TestSaleOrderType(common.TransactionCase):
         super(TestSaleOrderType, self).setUp()
         self.sale_type_model = self.env['sale.order.type']
         self.sale_order_model = self.env['sale.order']
-        self.sale_line_model = self.env['sale.order.line']
-        self.picking_model = self.env['stock.picking']
+        self.invoice_model = self.env['account.invoice']
         self.partner = self.env.ref('base.res_partner_1')
         self.sequence = self.env['ir.sequence'].create({
             'name': 'Test Sales Order',
@@ -68,3 +67,11 @@ class TestSaleOrderType(common.TransactionCase):
         for picking in sale_order.picking_ids:
             self.assertEqual(self.sale_type.invoice_state,
                              picking.invoice_state)
+            for move in picking.move_lines:
+                self.assertEqual(self.sale_type.invoice_state,
+                                 move.invoice_state)
+            invoices = picking.action_invoice_create(
+                self.journal, group=False, type='out_invoice')
+            for invoice in self.invoice_model.browse(invoices):
+                self.assertEqual(
+                    self.sale_type.journal_id, invoice.journal_id)
